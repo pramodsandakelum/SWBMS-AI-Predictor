@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+pandas
+psycopg2-binary
+lightgbm
+joblib
+apscheduler
+python-multipart
