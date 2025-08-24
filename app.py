@@ -13,7 +13,7 @@ app = FastAPI()
 # Allow frontend calls
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # replace with frontend domain
+    allow_origins=["*"],  # replace with frontend domain in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,9 +28,9 @@ DB_PARAMS = {
     "port": os.environ.get("POSTGRES_PORT", "6543")
 }
 
-# ----------------- Scheduler Function -----------------
+# ----------------- Core Training + Prediction -----------------
 def train_and_predict():
-    """Automated weekly training and prediction"""
+    """Train per-bin models and save predictions for next weekend"""
     try:
         conn = psycopg2.connect(**DB_PARAMS)
         cur = conn.cursor()
@@ -41,7 +41,7 @@ def train_and_predict():
             print("No readings found. Skipping prediction.")
             cur.close()
             conn.close()
-            return
+            return "No readings found"
 
         df['recorded_at'] = pd.to_datetime(df['recorded_at'])
         df = df.sort_values(['bin_id','recorded_at'])
@@ -58,7 +58,7 @@ def train_and_predict():
         features = [f'weight_t-{lag}' for lag in [1,2,3]] + \
                    [f'fullness_t-{lag}' for lag in [1,2,3]] + ['hour','dayofweek']
 
-        # Determine next weekend dates
+        # Next weekend dates
         today = datetime.utcnow()
         next_saturday = today + timedelta((5-today.weekday()) % 7)
         next_sunday = today + timedelta((6-today.weekday()) % 7)
@@ -70,12 +70,12 @@ def train_and_predict():
             X = bin_data[features]
             y = bin_data['weight_kg']
 
-            # Train LightGBM model
+            # Train LightGBM
             model = LGBMRegressor()
             model.fit(X, y)
             joblib.dump(model, f"lgbm_model_bin_{bin_id}.pkl")
 
-            # Future dataframe for prediction
+            # Future dataframe
             future_df = pd.DataFrame({
                 'hour': [0,6,12,18]*2,
                 'dayofweek': [5]*4 + [6]*4
@@ -87,7 +87,6 @@ def train_and_predict():
                 future_df[f'fullness_t-{lag}'] = last_row[f'fullness_t-{lag}']
 
             pred_weight = model.predict(future_df[features])
-            pred_fullness = last_row['fullness_percent']
 
             timestamps = [next_saturday + timedelta(hours=h) for h in range(0,24,6)] + \
                          [next_sunday + timedelta(hours=h) for h in range(0,24,6)]
@@ -96,11 +95,11 @@ def train_and_predict():
                 predictions_to_save.append((
                     bin_id,
                     float(w),
-                    t.date(),  # prediction_month
-                    datetime.utcnow()  # created_at
+                    t.date(),
+                    datetime.utcnow()
                 ))
 
-        # Insert predictions into database
+        # Save predictions
         insert_query = """
         INSERT INTO predictions (bin_id, predicted_weight_kg, prediction_month, created_at)
         VALUES (%s, %s, %s, %s)
@@ -110,11 +109,13 @@ def train_and_predict():
         cur.close()
         conn.close()
         print(f"[{datetime.utcnow()}] Predictions saved successfully.")
+        return "Predictions saved"
 
     except Exception as e:
         print(f"Error in train_and_predict: {e}")
+        return str(e)
 
-# ----------------- Scheduler Setup -----------------
+# ----------------- Scheduler -----------------
 scheduler = BackgroundScheduler()
 scheduler.add_job(train_and_predict, 'cron', day_of_week='sun', hour=0, minute=0)
 scheduler.start()
@@ -154,7 +155,6 @@ def latest_predictions():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
 @app.get("/prediction_history")
 def prediction_history():
     """Return all historical predictions"""
@@ -183,3 +183,15 @@ def prediction_history():
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+# ----------------- NEW Endpoints -----------------
+@app.post("/train")
+def manual_train():
+    """Manually trigger model training and prediction"""
+    result = train_and_predict()
+    return {"status": "success", "message": result}
+
+@app.get("/ping")
+def ping():
+    """Keep-alive endpoint"""
+    return {"alive": True, "time": datetime.utcnow().isoformat()}
