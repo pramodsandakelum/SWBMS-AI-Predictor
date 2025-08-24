@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Response
+from fastapi import FastAPI
 import pandas as pd
 import psycopg2
 import joblib
@@ -192,7 +192,6 @@ def manual_train():
     return {"status": "success", "message": result}
 
 @app.get("/ping")
-@app.head("/ping")
-def ping(response: Response):
-    """Keep-alive endpoint for Render uptime monitor"""
+def ping():
+    """Keep-alive endpoint"""
     return {"alive": True, "time": datetime.utcnow().isoformat()}
