@@ -192,6 +192,7 @@ def manual_train():
     return {"status": "success", "message": result}
 
 @app.get("/ping")
-def ping():
-    """Keep-alive endpoint"""
+@app.head("/ping")
+def ping(response: Response):
+    """Keep-alive endpoint for Render uptime monitor"""
     return {"alive": True, "time": datetime.utcnow().isoformat()}
